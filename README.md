@@ -82,3 +82,71 @@ Each entry `N[i, j]` represents the count of how many times character `j` follow
 The final `N` matrix looks like the following:
 
 ![Bigram Matrix N](./images/bigram_matrix_N.png)
+
+## Sampling words using multinomial distribution
+
+To generate words from the bigram model, we sample characters sequentially using a multinomial distribution. The key optimization is to **pre-compute the normalized probability matrix** instead of normalizing probabilities inside the sampling loop.
+
+### Efficient approach: Pre-normalize the probability matrix
+
+Instead of normalizing the probability distribution in each iteration of the loop, we can normalize all rows of the count matrix `N` upfront:
+
+```python
+# Convert count matrix to probability matrix
+P = N.float()
+# Normalize each row (each row represents probability distribution for next character)
+P /= P.sum(1, keepdim=True)
+```
+
+**Important:** Using `keepdim=True` is crucial for proper broadcasting. This ensures that:
+- `P` has shape `[27, 27]`
+- `P.sum(1, keepdim=True)` has shape `[27, 1]` (not `[27]`)
+- Broadcasting works correctly to normalize each row independently
+
+Without `keepdim=True`, the shape would be `[27]`, which would still broadcast but produce incorrect results (column-wise normalization instead of row-wise).
+
+### Sampling loop
+
+Once `P` is pre-normalized, the sampling loop becomes efficient:
+
+```python
+import torch
+
+# Pre-normalize probability matrix
+P = N.float()
+P /= P.sum(1, keepdim=True)
+
+# Generator for reproducibility
+g = torch.Generator().manual_seed(2147483647)
+
+# Generate multiple names
+for i in range(20):
+    out = []
+    ix = 0  # Start with '.' (index 0)
+    while True:
+        # Use pre-computed probability distribution (already normalized)
+        p = P[ix]
+        # Sample next character index
+        ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item()
+        out.append(itos[ix])
+        if ix == 0:  # '.' marks the end of the word
+            break
+    print(''.join(out))
+```
+
+### Why this is efficient
+
+The naive approach would normalize probabilities inside the loop:
+
+```python
+while True:
+    p = N[ix].float()
+    p = p / p.sum()  # Normalizing inside loop - inefficient!
+    ix = torch.multinomial(p, num_samples=1, replacement=True, generator=g).item()
+    # ...
+```
+
+By pre-normalizing `P`, we:
+1. **Reduce redundant computations**: Normalization happens once instead of once per character during sampling
+2. **Improve performance**: Especially noticeable when generating many words
+3. **Maintain correctness**: Each row of `P` is a proper probability distribution (sums to 1)
